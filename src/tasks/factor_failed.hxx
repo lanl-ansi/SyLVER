@@ -10,6 +10,7 @@
 // STD
 #include <assert.h>
 
+namespace sylver {
 namespace spldlt {
 
    ////////////////////////////////////////////////////////////
@@ -44,7 +45,7 @@ namespace spldlt {
       
          for (int j=rsa; j<nr; ++j) {
             for (int i=j; i<nr; ++i) {
-               hdls[nh] = node.get_contrib_block(i, j).hdl;
+               hdls[nh] = node.contrib_block(i, j).hdl;
                ++nh;
             }
          }
@@ -69,4 +70,4 @@ namespace spldlt {
    }
 
 
-} // end of namespace spldlt
+}} // end of namespace sylver::spldlt

@@ -6,8 +6,10 @@
 // SyLVER
 #include "SymbolicFront.hxx"
 #include "NumericFront.hxx"
-#include "tasks.hxx"
+#include "tasks/indef.hxx"
+#include "tasks/tasks.hxx"
 
+namespace sylver {
 namespace spldlt {
 
    ////////////////////////////////////////////////////////////////////////////////   
@@ -57,7 +59,7 @@ namespace spldlt {
       // Assemble front: non fully-summed columns i.e. contribution block 
       for (auto* child=node.first_child; child!=NULL; child=child->next_child) {
 
-         sylver::SymbolicFront& child_sfront = child->symb();
+         sylver::SymbolicFront const& child_sfront = child->symb();
          // SymbolicFront &child_sfront = symb_[child->symb.idx];
 
          int ldcontrib = child_sfront.nrow - child_sfront.ncol;
@@ -74,14 +76,37 @@ namespace spldlt {
 // #if defined(SPLDLT_USE_STARPU)
 //             starpu_task_wait_for_all();
 // #endif
-               assemble_contrib_subtree_task(
-                     node, child_sfront, child_contrib,
-                     child_sfront.contrib_idx, child_sfront.map,
-                     ASSEMBLE_PRIO);
-// #if defined(SPLDLT_USE_STARPU)
-//             starpu_task_wait_for_all();
-// #endif
 
+               // Serial assembly of contrib block into parent fronts.
+               // assemble_contrib_subtree_task(
+               //       node, child_sfront, child_contrib,
+               //       child_sfront.contrib_idx, child_sfront.map,
+               //       ASSEMBLE_PRIO);               
+
+               // #if defined(SPLDLT_USE_STARPU)
+               //             starpu_task_wait_for_all();
+               // #endif
+
+               // Blocked assembly of contrib block into parent
+               // fronts.
+
+               int const cn = child->nrow() - child->ncol();
+               // Number of blocks in contrib
+               int const nblk = ((cn - 1) / child->blksz()) + 1;
+
+               // Loop over block-columns in `child` node contrib
+               // contribution
+               for (int jj = 0; jj < nblk; ++jj) {
+                  // Loop over sub-diag block-rows in `child` node
+                  // contributions
+                  for (int ii = jj; ii < nblk; ++ii) {
+                     assemble_contrib_subtree_block_task(
+                           node, child_sfront, ii, jj,
+                           child_contrib, child_sfront.contrib_idx,
+                           ASSEMBLE_PRIO);
+                  }
+               }
+               
             }
             else {                     
 
@@ -143,12 +168,14 @@ namespace spldlt {
       /*
        * Add children
        */
+      // Initialize index of delayed column in the parent
       int delay_col = snode.ncol;
 
       // printf("[assemble]\n");
 
       // Allocate mapping array
       // int *map = new int[n+1];
+      // TODO: Use workspace for mapping
       std::vector<int, PoolAllocInt> map(n+1, PoolAllocInt(pool_alloc));
 
       // build lookup vector, allowing for insertion of delayed vars
@@ -162,51 +189,24 @@ namespace spldlt {
       // Assemble front: fully-summed columns 
       for (auto* child=node.first_child; child!=NULL; child=child->next_child) {
 
-         sylver::SymbolicFront &csnode = child->symb(); // Children symbolic node
+         sylver::SymbolicFront& csnode = child->symb(); // Children symbolic node
 
-         int cm = csnode.nrow - csnode.ncol;
+         int const cm = csnode.nrow - csnode.ncol;
          csnode.map = new int[cm];
          for (int i=0; i<cm; i++)
             csnode.map[i] = map[ csnode.rlist[csnode.ncol+i] ];
 
-         int ldcontrib = csnode.nrow - csnode.ncol;
+         int const ldcontrib = csnode.nrow - csnode.ncol;
          if (csnode.exec_loc == -1) {
-            // Assemble contributions from child front
+            //
+            // Assemble contributions from children front
+            //
 
-            // printf("[assemble] child->ndelay_out = %d\n", child->ndelay_out);
-
-            /* Handle delays - go to back of node
-             * (i.e. become the last rows as in lower triangular format) */
-            // for(int i=0; i<child->ndelay_out; i++) {
-            //    // Add delayed rows (from delayed cols)
-            //    T *dest = &node.lcol[delay_col*(ldl+1)];
-            //    int lds = align_lda<T>(csnode.nrow + child->ndelay_in);
-            //    T *src = &child->lcol[(child->nelim+i)*(lds+1)];
-            //    node.perm[delay_col] = child->perm[child->nelim+i];
-            //    for(int j=0; j<child->ndelay_out-i; j++) {
-            //       dest[j] = src[j];
-            //    }
-            //    // Add child's non-fully summed rows (from delayed cols)
-            //    dest = node.lcol;
-            //    src = &child->lcol[child->nelim*lds + child->ndelay_in +i*lds];
-            //    for(int j=csnode.ncol; j<csnode.nrow; j++) {
-            //       int r = map[ csnode.rlist[j] ];
-            //       // int r = csnode.map[j];
-            //       if(r < ncol) dest[r*ldl+delay_col] = src[j];
-            //       else         dest[delay_col*ldl+r] = src[j];
-            //    }
-            //    delay_col++;
-            // }
-
-// #if defined(SPLDLT_USE_STARPU)
-//             starpu_task_wait_for_all();
-// #endif      
-
+            // Assemble delays
+            
             // assemble_delays(*child, delay_col, node);
             assemble_delays_task(*child, delay_col, node);
-// #if defined(SPLDLT_USE_STARPU)
-//             starpu_task_wait_for_all();
-// #endif      
+
             delay_col += child->ndelay_out();
 
             // Handle expected contributions (only if something there)
@@ -222,33 +222,33 @@ namespace spldlt {
                // Loop over blocks in contribution blocks
                for (int jj = csa; jj < cnr; ++jj) {
                   for (int ii = jj; ii < cnr; ++ii) {
+
+                     // Kernel call (synchronous)
                      // assemble_block(node, *child, ii, jj, csnode.map);
+
+                     // Task call (asynchronous)
                      assemble_block_task(
                            node, *child, ii, jj, csnode.map, ASSEMBLE_PRIO);
-// #if defined(SPLDLT_USE_STARPU)
-//                      starpu_task_wait_for_all();
-// #endif
                   }
                }
-// #if defined(SPLDLT_USE_STARPU)
-//                starpu_task_wait_for_all();
-// #endif
             }
 
          }
          else {
+            //
             // Assemble contributions from subtree
-
-            // printf("[assemble] TETETET");
-
+            //
+            
             // Assemble delays
+
+            
+            // Kernel call (synchronous)
             // assemble_delays_subtree(
             //       node, csnode, child_contrib, csnode.contrib_idx, delay_col);
+
+            // Task call (asynchronous)
             assemble_delays_subtree_task(
                   node, csnode, child_contrib, csnode.contrib_idx, delay_col);
-// #if defined(SPLDLT_USE_STARPU)
-//             starpu_task_wait_for_all();
-// #endif
             
             // Retreive contribution block from subtrees
             int cn, ldcontrib, ndelay, lddelay;
@@ -258,64 +258,47 @@ namespace spldlt {
                   child_contrib[csnode.contrib_idx], &cn, &cval, &ldcontrib, &crlist,
                   &ndelay, &delay_perm, &delay_val, &lddelay
                   );
-            // delay_col += child->ndelay_out;
+
+            // Update position (i.e. column index) of first delayed
+            // column from current children node to the parent front
             delay_col += ndelay;
-            // printf("[assemble] ndelay = %d, delay_col = %d\n", ndelay, delay_col);
 
-            // Assemble contribution blocks
+            // Assemble expected contributions
+
+            // Kernel call (synchronous)
             // assemble_subtree(node, csnode, child_contrib, csnode.contrib_idx);
-            assemble_subtree_task(
-                  node, csnode, child_contrib, csnode.contrib_idx,
-                  csnode.map, ASSEMBLE_PRIO);
-// #if defined(SPLDLT_USE_STARPU)
-//                      starpu_task_wait_for_all();
-// #endif      
 
-            // // int *cache = new int[cn];
-            // // for(int j=0; j<cn; ++j)
-            // //    cache[j] = map[ crlist[j] ];
+            // Task call (asynchronous)
+            // Serial assembly
+            // assemble_subtree_task(
+            //       node, csnode, child_contrib, csnode.contrib_idx,
+            //       csnode.map, ASSEMBLE_PRIO);
 
-            // // printf("[assemble] contrib_idx = %d, ndelay = %d\n", csnode.contrib_idx, ndelay);
+            // Task call (asynchronous)
+            // Parallel assembly
 
-            // /* Handle delays - go to back of node
-            //  * (i.e. become the last rows as in lower triangular format) */
-            // for(int i=0; i<ndelay; i++) {
-            //    // Add delayed rows (from delayed cols)
-            //    T *dest = &node.lcol[delay_col*(ldl+1)];
-            //    T const* src = &delay_val[i*(lddelay+1)];
-            //    node.perm[delay_col] = delay_perm[i];
-            //    for(int j=0; j<ndelay-i; j++) {
-            //       dest[j] = src[j];
-            //    }
-            //    // Add child's non-fully summed rows (from delayed cols)
-            //    dest = node.lcol;
-            //    src = &delay_val[i*lddelay+ndelay];
-            //    for(int j=0; j<cn; j++) {
-            //       // int r = cache[j];
-            //       int r = csnode.map[j];
-            //       if(r < ncol) dest[r*ldl+delay_col] = src[j];
-            //       else         dest[delay_col*ldl+r] = src[j];
-            //    }
-            //    delay_col++;
-            // }
-            // if(!cval) continue; // child was all delays, nothing more to do
-            // /* Handle expected contribution */
-            // for(int j = 0; j < cn; ++j) {               
-            //    int c = csnode.map[ j ]; // Destination column                  
-            //    T const* src = &cval[j*ldcontrib];
-            //    if (c < snode.ncol) {
-            //       int ldd = node.get_ldl();
-            //       T *dest = &node.lcol[c*ldd];
+            // Number of blocks in contrib
+            int const nblk = ((cn - 1) / child->blksz()) + 1;
 
-            //       for (int i = j ; i < cn; ++i) {
-            //          // Assemble destination block
-            //          dest[ csnode.map[ i ]] += src[i];
-            //       }
-            //    }
-            // }
+            // Loop over block-columns in `child` node contrib
+            // contribution
+            for (int jj = 0; jj < nblk; ++jj) {
+               // Loop over sub-diag block-rows in `child` node
+               // contributions
+               for (int ii = jj; ii < nblk; ++ii) {
+                  assemble_subtree_block_task(
+                        node, csnode, ii, jj,
+                        child_contrib, csnode.contrib_idx,
+                        ASSEMBLE_PRIO);
+               }
+            }
 
          }
-      }
+// #if defined(SPLDLT_USE_STARPU)
+//             starpu_task_wait_for_all();
+// #endif         
+      } // Loop over children nodes
+
    } // assemble
 
-} // end of namespace spldlt
+}} // End of namespace sylver::spldlt

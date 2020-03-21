@@ -17,282 +17,287 @@
 // #include "ssids/cpu/kernels/assemble.hxx"
 #include "ssids/contrib.h"
 
+namespace sylver {
 namespace spldlt {
 
 #if defined(SPLDLT_USE_STARPU)
 
-   namespace starpu {
+namespace starpu {
 
-      extern starpu_data_handle_t workspace_hdl;      
+   extern starpu_data_handle_t workspace_hdl;      
 
-      // Register handles for a node in StarPU
-      template <typename T, typename PoolAlloc>
-      void register_node(
-            NumericFront<T, PoolAlloc> &front) {
+   // Register handles for a node in StarPU
+   template <typename T, typename PoolAlloc>
+   void register_node(
+         NumericFront<T, PoolAlloc> &front) {
          
-         sylver::SymbolicFront& sfront = front.symb();
-         int blksz = front.blksz();
+      sylver::SymbolicFront& sfront = front.symb();
+      int blksz = front.blksz();
 
-         int const m = front.nrow();
-         int const n = front.ncol();
-         T *a = front.lcol;
-         int const lda = front.ldl();
-         int const nr = front.nr(); // number of block rows
-         int const nc = front.nc(); // number of block columns
-         // sfront.handles.reserve(nr*nc);
-         sfront.handles.resize(nr*nc); // Allocate handles
+      int const m = front.nrow();
+      int const n = front.ncol();
+      T *a = front.lcol;
+      int const lda = front.ldl();
+      int const nr = front.nr(); // number of block rows
+      int const nc = front.nc(); // number of block columns
+      // sfront.handles.reserve(nr*nc);
+      sfront.handles.resize(nr*nc); // Allocate handles
 
-         for(int j = 0; j < nc; ++j) {
-            int blkn = std::min(blksz, n - j*blksz);
+      for(int j = 0; j < nc; ++j) {
+         int blkn = std::min(blksz, n - j*blksz);
 
-            for(int i = j; i < nr; ++i) {
-               int blkm = std::min(blksz, m - i*blksz);
+         for(int i = j; i < nr; ++i) {
+            int blkm = std::min(blksz, m - i*blksz);
 
-               // TODO remove the following register
-               starpu_matrix_data_register(
-                     &(sfront.handles[i + j*nr]), // StarPU handle ptr 
-                     STARPU_MAIN_RAM, // memory 
-                     reinterpret_cast<uintptr_t>(&a[(j*blksz)*lda+(i*blksz)]),
-                     lda, blkm, blkn,
-                     sizeof(T));
+            // TODO remove the following register
+            starpu_matrix_data_register(
+                  &(sfront.handles[i + j*nr]), // StarPU handle ptr 
+                  STARPU_MAIN_RAM, // memory 
+                  reinterpret_cast<uintptr_t>(&a[(j*blksz)*lda+(i*blksz)]),
+                  lda, blkm, blkn,
+                  sizeof(T));
 
-               // Register StarPU handle for block (i,j)
-               front.blocks[j*nr+i].register_handle(); 
+            // Register StarPU handle for block (i,j)
+            front.blocks[j*nr+i].register_handle(); 
 
+         }
+      }
+
+      int const ldcontrib = m-n;         
+      // Allocate and init handles in contribution blocks         
+      if (ldcontrib>0) {
+         // Index of first block in contrib
+         int rsa = n/blksz;
+         // Number of block in contrib
+         // int ncontrib = nr-rsa;
+
+         for(int j = rsa; j < nr; j++) {
+            for(int i = j; i < nr; i++) {
+               // Register block in StarPU
+               front.contrib_block(i, j).register_handle();
+               // front.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].register_handle();
             }
          }
+      }
+   }
 
-         int const ldcontrib = m-n;         
-         // Allocate and init handles in contribution blocks         
-         if (ldcontrib>0) {
-            // Index of first block in contrib
-            int rsa = n/blksz;
-            // Number of block in contrib
-            int ncontrib = nr-rsa;
+   ////////////////////////////////////////////////////////////////////////////////   
+   // register_node_indef
 
-            for(int j = rsa; j < nr; j++) {
-               for(int i = j; i < nr; i++) {
-                  // Register block in StarPU
-                  front.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].register_handle();
-               }
+   /// @brief Register handles for a node in StarPU.
+   template <typename T, typename PoolAlloc>
+   void register_node_indef(NumericFront<T, PoolAlloc>& front) {
+
+      // Note: blocks are already registered when allocated
+         
+      typedef typename std::allocator_traits<PoolAlloc>::template rebind_alloc<int> IntAlloc;
+
+      sylver::SymbolicFront& sfront = front.symb();
+      int blksz = front.blksz();
+      int m = front.nrow();
+      int n = front.ncol();
+      T *a = front.lcol;
+      int lda = spral::ssids::cpu::align_lda<T>(m);
+      int nr = front.nr(); // number of block rows
+      int nc = front.nc(); // number of block columns
+      spldlt::ldlt_app_internal::ColumnData<T, IntAlloc>& cdata = *front.cdata;
+
+      // Block diagonal matrix 
+      T *d = &a[n*lda];
+
+      // sfront.handles.reserve(nr*nc);
+      sfront.handles.resize(nr*nc); // allocate handles
+      // printf("[register_front] sfront.handles size = %d\n", sfront.handles.size());
+      for(int j = 0; j < nc; ++j) {
+
+         int blkn = std::min(blksz, n - j*blksz);
+
+         // Register cdata for APP factorization.
+         // FIXME: Only if pivot_method is APP
+         cdata[j].register_handle(); // Symbolic handle on column j
+         cdata[j].register_d_hdl(d, 2*std::min((j+1)*blksz, n)); // Handle on diagonal D 
+         // cdata[j].register_d_hdl(d, 2*n); // Handle on diagonal D 
+
+         for(int i = j; i < nr; ++i) {
+            int blkm = std::min(blksz, m - i*blksz);
+
+            // TODO remove sfront.handles registration for indef case
+            starpu_matrix_data_register(
+                  &(sfront.handles[i + j*nr]), // StarPU handle ptr 
+                  STARPU_MAIN_RAM, // memory 
+                  reinterpret_cast<uintptr_t>(&a[(j*blksz)*lda+(i*blksz)]),
+                  lda, blkm, blkn,
+                  sizeof(T));
+
+            // Register StarPU handle for block (i,j)
+            front.blocks[j*nr+i].register_handle(); 
+         }
+      }
+
+      int ldcontrib = m-n;
+         
+      // Allocate and init handles in contribution blocks         
+      if (ldcontrib>0 && front.contrib_blocks.size()>0) {
+         // Index of first block in contrib
+         int rsa = n/blksz;
+         // Number of block in contrib
+         int ncontrib = nr-rsa;
+
+         for(int j = rsa; j < nr; j++) {
+            for(int i = j; i < nr; i++) {
+               // Register block in StarPU
+               // front.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].register_handle();
+               front.contrib_block(i, j).register_handle();
             }
          }
       }
 
-      ////////////////////////////////////////////////////////////////////////////////   
-      // register_node_indef
-      //
-      /// @brief Register handles for a node in StarPU.
-      template <typename T, typename PoolAlloc>
-      void register_node_indef(NumericFront<T, PoolAlloc>& front) {
+      // T *contrib = node.contrib;
 
-         // Note: blocks are already registered when allocated
-         
-         typedef typename std::allocator_traits<PoolAlloc>::template rebind_alloc<int> IntAlloc;
+      // // Allocate and init handles in contribution blocks         
+      // if (contrib) {
+      //    // Index of first block in contrib
+      //    int rsa = n/blksz;
+      //    // Number of block in contrib
+      //    int ncontrib = nr-rsa;
+      //    snode.contrib_handles.resize(ncontrib*ncontrib);
 
-         sylver::SymbolicFront& sfront = front.symb();
-         int blksz = front.blksz();
-         int m = front.nrow();
-         int n = front.ncol();
-         T *a = front.lcol;
-         int lda = spral::ssids::cpu::align_lda<T>(m);
-         int nr = front.nr(); // number of block rows
-         int nc = front.nc(); // number of block columns
-         spldlt::ldlt_app_internal::ColumnData<T, IntAlloc>& cdata = *front.cdata;
+      //    for(int j = rsa; j < nr; j++) {
+      //       // First col in contrib block
+      //       int first_col = std::max(j*blksz, n);
+      //       // Block width
+      //       int blkn = std::min((j+1)*blksz, m) - first_col;
 
-         // Block diagonal matrix 
-         T *d = &a[n*lda];
+      //       for(int i = j; i < nr; i++) {
+      //          // First col in contrib block
+      //          int first_row = std::max(i*blksz, n);
+      //          // Block height
+      //          int blkm = std::min((i+1)*blksz, m) - first_row;
 
-         // sfront.handles.reserve(nr*nc);
-         sfront.handles.resize(nr*nc); // allocate handles
-         // printf("[register_front] sfront.handles size = %d\n", sfront.handles.size());
-         for(int j = 0; j < nc; ++j) {
-
-            int blkn = std::min(blksz, n - j*blksz);
-
-            // Register cdata for APP factorization.
-            // FIXME: Only if pivot_method is APP
-            cdata[j].register_handle(); // Symbolic handle on column j
-            cdata[j].register_d_hdl(d, 2*std::min((j+1)*blksz, n)); // Handle on diagonal D 
-            // cdata[j].register_d_hdl(d, 2*n); // Handle on diagonal D 
-
-            for(int i = j; i < nr; ++i) {
-               int blkm = std::min(blksz, m - i*blksz);
-
-               // TODO remove sfront.handles registration for indef case
-               starpu_matrix_data_register(
-                     &(sfront.handles[i + j*nr]), // StarPU handle ptr 
-                     STARPU_MAIN_RAM, // memory 
-                     reinterpret_cast<uintptr_t>(&a[(j*blksz)*lda+(i*blksz)]),
-                     lda, blkm, blkn,
-                     sizeof(T));
-
-               // Register StarPU handle for block (i,j)
-               front.blocks[j*nr+i].register_handle(); 
-            }
-         }
-
-         int ldcontrib = m-n;
-         
-         // Allocate and init handles in contribution blocks         
-         if (ldcontrib>0 && front.contrib_blocks.size()>0) {
-            // Index of first block in contrib
-            int rsa = n/blksz;
-            // Number of block in contrib
-            int ncontrib = nr-rsa;
-
-            for(int j = rsa; j < nr; j++) {
-               for(int i = j; i < nr; i++) {
-                  // Register block in StarPU
-                  front.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].register_handle();
-               }
-            }
-         }
-
-         // T *contrib = node.contrib;
-
-         // // Allocate and init handles in contribution blocks         
-         // if (contrib) {
-         //    // Index of first block in contrib
-         //    int rsa = n/blksz;
-         //    // Number of block in contrib
-         //    int ncontrib = nr-rsa;
-         //    snode.contrib_handles.resize(ncontrib*ncontrib);
-
-         //    for(int j = rsa; j < nr; j++) {
-         //       // First col in contrib block
-         //       int first_col = std::max(j*blksz, n);
-         //       // Block width
-         //       int blkn = std::min((j+1)*blksz, m) - first_col;
-
-         //       for(int i = j; i < nr; i++) {
-         //          // First col in contrib block
-         //          int first_row = std::max(i*blksz, n);
-         //          // Block height
-         //          int blkm = std::min((i+1)*blksz, m) - first_row;
-
-         //          // starpu_matrix_data_register(
-         //          //       &(snode.contrib_handles[(i-rsa)+(j-rsa)*ncontrib]), // StarPU handle ptr
-         //          //       STARPU_MAIN_RAM, // memory 
-         //          //       reinterpret_cast<uintptr_t>(&contrib[(first_col-n)*ldcontrib+(first_row-n)]),
-         //          //       ldcontrib, blkm, blkn, sizeof(T));
+      //          // starpu_matrix_data_register(
+      //          //       &(snode.contrib_handles[(i-rsa)+(j-rsa)*ncontrib]), // StarPU handle ptr
+      //          //       STARPU_MAIN_RAM, // memory 
+      //          //       reinterpret_cast<uintptr_t>(&contrib[(first_col-n)*ldcontrib+(first_row-n)]),
+      //          //       ldcontrib, blkm, blkn, sizeof(T));
                   
-         //          node.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].register_handle();
-         //       }
-         //    }
+      //          node.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].register_handle();
+      //       }
+      //    }
 
-         // }
-      }
+      // }
+   }
 
-      /// @brief Unregister StarPU data handles associated with a node
-      template <typename T, typename PoolAlloc, bool async=true>
-      void unregister_node_indef(
-            NumericFront<T, PoolAlloc> &node
-            ) {
+   /// @brief Unregister StarPU data handles associated with a node
+   template <typename T, typename PoolAlloc, bool async=true>
+   void unregister_node_indef(
+         NumericFront<T, PoolAlloc> &node
+         ) {
 
-         // printf("[unregister_node_indef] nodeidx = %d\n", node.symb.idx);
+      // printf("[unregister_node_indef] nodeidx = %d\n", node.symb.idx);
          
-         typedef typename std::allocator_traits<PoolAlloc>::template rebind_alloc<int> IntAlloc;
+      typedef typename std::allocator_traits<PoolAlloc>::template rebind_alloc<int> IntAlloc;
 
-         // Get node info
-         sylver::SymbolicFront &snode = node.symb();
-         int const blksz = node.blksz();
-         int const m = node.nrow();
-         int const n = node.ncol();
-         int const nr = node.nr(); // number of block rows
-         int const nc = node.nc(); // number of block columns
+      // Get node info
+      sylver::SymbolicFront &snode = node.symb();
+      int const blksz = node.blksz();
+      int const m = node.nrow();
+      int const n = node.ncol();
+      int const nr = node.nr(); // number of block rows
+      int const nc = node.nc(); // number of block columns
 
-         assert(node.cdata); // Make sure cdata is allocated
+      assert(node.cdata); // Make sure cdata is allocated
 
-         spldlt::ldlt_app_internal::
-            ColumnData<T, IntAlloc>& cdata = *node.cdata;
+      spldlt::ldlt_app_internal::
+         ColumnData<T, IntAlloc>& cdata = *node.cdata;
          
-         // Unregister block handles in the factors
-         for(int j = 0; j < nc; ++j) {
+      // Unregister block handles in the factors
+      for(int j = 0; j < nc; ++j) {
 
-            // FIXME: only if PivotMethod is APP
-            cdata[j].template unregister_handle<async>();
+         // FIXME: only if PivotMethod is APP
+         cdata[j].template unregister_handle<async>();
 
-            cdata[j].template unregister_d_hdl<async>(); // Unregister handle on diagonal D
+         cdata[j].template unregister_d_hdl<async>(); // Unregister handle on diagonal D
 
-            for(int i = j; i < nr; ++i) {
+         for(int i = j; i < nr; ++i) {
                
-               if (async) starpu_data_unregister_submit(snode.handles[i + j*nr]);
-               else       starpu_data_unregister(snode.handles[i + j*nr]);
+            if (async) starpu_data_unregister_submit(snode.handles[i + j*nr]);
+            else       starpu_data_unregister(snode.handles[i + j*nr]);
 
-               // Unregister block (i,j)
-               node.blocks[j*nr+i].template unregister_handle<async>();
-            }
-         }
-
-         // Unregister block handles in the contribution blocks
-         int ldcontrib = m-n;
-
-         if (ldcontrib>0) {
-            // Index of first block in contrib
-            int rsa = n/blksz;
-            // Number of block in contrib
-            int ncontrib = nr-rsa;
-
-            for(int j = rsa; j < nr; j++) {
-               for(int i = j; i < nr; i++) {
-
-                  // Register block in StarPU
-                  node.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].template unregister_handle<async>();
-               }
-            }
-
+            // Unregister block (i,j)
+            node.blocks[j*nr+i].template unregister_handle<async>();
          }
       }
 
-      /// @brief Unregister StarPU data handles associated with a node
-      template <typename T, typename PoolAlloc, bool async=true>
-      void unregister_node_posdef(
-            NumericFront<T, PoolAlloc> &node
-            ) {
+      // Unregister block handles in the contribution blocks
+      int ldcontrib = m-n;
 
-         // Get node info
-         sylver::SymbolicFront &snode = node.symb();
-         int const blksz = node.blksz();
-         int const m = node.nrow();
-         int const n = node.ncol();
-         int const nr = node.nr(); // number of block rows
-         int const nc = node.nc(); // number of block columns
+      if (ldcontrib>0) {
+         // Index of first block in contrib
+         int rsa = n/blksz;
+         // Number of block in contrib
+         int ncontrib = nr-rsa;
 
-         // Unregister block handles in the factors
-         for(int j = 0; j < nc; ++j) {
-            for(int i = j; i < nr; ++i) {
+         for(int j = rsa; j < nr; j++) {
+            for(int i = j; i < nr; i++) {
 
-               // TODO remove snode.handles array
-               if (async) starpu_data_unregister_submit(snode.handles[i + j*nr]);
-               else       starpu_data_unregister(snode.handles[i + j*nr]);
-
-               // Unregister block (i,j)
-               node.blocks[j*nr+i].template unregister_handle<async>();
+               // Register block in StarPU
+               // node.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].template unregister_handle<async>();
+               node.contrib_block(i, j).template unregister_handle<async>();
             }
          }
+
+      }
+   }
+
+   /// @brief Unregister StarPU data handles associated with a node
+   template <typename T, typename PoolAlloc, bool async=true>
+   void unregister_node_posdef(
+         NumericFront<T, PoolAlloc> &node
+         ) {
+
+      // Get node info
+      sylver::SymbolicFront &snode = node.symb();
+      int const blksz = node.blksz();
+      int const m = node.nrow();
+      int const n = node.ncol();
+      int const nr = node.nr(); // number of block rows
+      int const nc = node.nc(); // number of block columns
+
+      // Unregister block handles in the factors
+      for(int j = 0; j < nc; ++j) {
+         for(int i = j; i < nr; ++i) {
+
+            // TODO remove snode.handles array
+            if (async) starpu_data_unregister_submit(snode.handles[i + j*nr]);
+            else       starpu_data_unregister(snode.handles[i + j*nr]);
+
+            // Unregister block (i,j)
+            node.blocks[j*nr+i].template unregister_handle<async>();
+         }
+      }
          
-         // Unregister block handles in the contribution blocks
-         int ldcontrib = m-n;
+      // Unregister block handles in the contribution blocks
+      int ldcontrib = m-n;
 
-         if (ldcontrib>0) {
-            // Index of first block in contrib
-            int rsa = n/blksz;
-            // Number of block in contrib
-            int ncontrib = nr-rsa;
+      if (ldcontrib>0) {
+         // Index of first block in contrib
+         int rsa = n/blksz;
+         // Number of block in contrib
+         int ncontrib = nr-rsa;
 
-            for(int j = rsa; j < nr; j++) {
-               for(int i = j; i < nr; i++) {
+         for(int j = rsa; j < nr; j++) {
+            for(int i = j; i < nr; i++) {
 
-                  // Register block in StarPU
-                  node.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].template unregister_handle<async>();
-               }
+               // Register block in StarPU
+               // node.contrib_blocks[(i-rsa)+(j-rsa)*ncontrib].template unregister_handle<async>();
+               node.contrib_block(i, j).template unregister_handle<async>();
             }
+         }
 
-         }         
-      }      
+      }         
+   }      
 
-   } // namespace spldlt::starpu
+} // End of namespace sylver::spldlt::starpu
 
 #endif
 
@@ -369,7 +374,8 @@ namespace spldlt {
 
 #if defined(SPLDLT_USE_STARPU)
 #if defined(SPLDLT_USE_GPU)
-      starpu_memory_pin(front.lcol, len*sizeof(T));
+      int ret = starpu_memory_pin(front.lcol, len*sizeof(T));
+      // STARPU_CHECK_RETURN_VALUE(ret, "starpu_memory_pin");
 #endif
 #endif
       int err;
@@ -439,6 +445,14 @@ namespace spldlt {
       size_t len =  (ldl+2) * ncol; // indef (includes D)
 
       front.lcol = FATypeTraits::allocate(factor_alloc_type, len);
+      assert(front.lcol != nullptr);
+
+#if defined(SPLDLT_USE_STARPU)
+#if defined(SPLDLT_USE_GPU)
+      int ret = starpu_memory_pin(front.lcol, len*sizeof(T));
+      // STARPU_CHECK_RETURN_VALUE(ret, "starpu_memory_pin");
+#endif
+#endif
       
       // Get space for contribution block + (explicitly do not zero it!)
       front.alloc_contrib_blocks();
@@ -545,21 +559,17 @@ namespace spldlt {
                        int ii, int jj, int const* cmap) {
       
       sylver::SymbolicFront const& csnode = cnode.symb();
-      int blksz = cnode.blksz();
+      int const blksz = cnode.blksz();
       
-      // Source node
-      int cnrow = cnode.nrow(); // Number of rows (including delays) 
-      int cncol = cnode.ncol(); // Number of cols (including delays)
+      // Source node info
+      int const cnrow = cnode.nrow(); // Number of rows (including delays) 
+      int const cncol = cnode.ncol(); // Number of cols (including delays)
 
-      int cm = csnode.nrow - csnode.ncol;
-      int csa = cncol / blksz; // Index of first block in contrib
-      int cnr = cnode.nr(); // number of block rows in child node
-      int cncontrib = cnr-csa;
       // Source block
-      sylver::Tile<T, PoolAlloc> const& blk = cnode.contrib_blocks[(ii-csa)+(jj-csa)*cncontrib];
-      int blk_lda = blk.lda;
-      int blk_m = blk.m;
-      int blk_n = blk.n;
+      auto const& blk = cnode.contrib_block(ii, jj);
+      int const blk_lda = blk.lda;
+      int const blk_m = blk.m;
+      int const blk_n = blk.n;
 
       // index of first column in CB
       int col_sa = (cncol > jj*blksz) ? 0 : (jj*blksz-cncol);
@@ -579,12 +589,9 @@ namespace spldlt {
          int c = cmap[ col_sa + j ]; // Destination column in parent front
 
          T *src = &(blk.a[j*blk_lda]); // Source column
-         
-         int ncol = node.symb().ncol; // no delays!
-         // printf("[assemble_block] ncol: %d\n", ncol);
-         
+                  
          // Enusre the destination column is in the fully-summed elements
-         if (c < ncol) {
+         if (c < node.symb().ncol) {
             
             // printf("[assemble_block] c: %d\n", c);
 
@@ -601,38 +608,6 @@ namespace spldlt {
             }
          }
       }
-
-      // // loop over column in block
-      // for (int j=c_sa; j<c_en; j++) {
-
-      //    // int c = map[ csnode.rlist[csnode.ncol+j] ];
-      //    int c = cmap[ j ];
-      //    // T *src = &(cnode.contrib[j*cm]);
-      //    T *src = &(src_blk.a[(j-c_sa)*ld_src_blk]);
-                        
-      //    int ncol = node.symb.ncol; // no delays!
-
-      //    // printf("[factor_mf] c: %d, ncol: %d\n", c, ncol);
-
-      //    if (c < ncol) {
-      //       int ldd = node.get_ldl();
-      //       T *dest = &node.lcol[c*ldd];
-
-      //       // int const* idx = &cache[j];                           
-      //       // loop over rows in block
-
-      //       int r_sa = (ii==jj) ? j : (ii*blksz-csnode.ncol); // first row in block
-
-      //       for (int i=r_sa; i<r_en; i++) {
-
-      //          // int ii = map[ csnode.rlist[csnode.ncol+col+row] ];
-      //          // dest[ idx[i] ] += src[i];
-
-      //          // dest[ map[ csnode.rlist[csnode.ncol+i] ] ] += src[i];               
-      //          dest[ cmap[i] ] += src[i-r_sa];
-      //       }
-      //    }
-      // }
 
    }   
    
@@ -703,26 +678,17 @@ namespace spldlt {
 
       sylver::SymbolicFront const& csnode = cnode.symb();
       
-      int cm = csnode.nrow - csnode.ncol;
-      int ncol = node.ncol();
-      int nrow = node.nrow();
+      int const ncol = node.ncol();
+      int const nrow = node.nrow();
 
       // Source block
-      int cncol = cnode.ncol();
-      int cnrow = cnode.nrow();
+      int const cncol = cnode.ncol();
+      int const cnrow = cnode.nrow();
 
-      int csa = cncol / blksz; // Index of first block in contrib
-      int cnr = cnode.nr(); // Number of block rows in child node
-      int cncontrib = cnr-csa;
-      sylver::Tile<T, PoolAlloc> const& src_blk = cnode.contrib_blocks[(ii-csa)+(jj-csa)*cncontrib];
+      auto const& src_blk = cnode.contrib_block(ii, jj);
       int src_blk_lda = src_blk.lda;
       int src_blk_m = src_blk.m;
       int src_blk_n = src_blk.n;
-
-      // Destination block
-      int sa = ncol / blksz; // Index of first block in contrib
-      int nr = node.nr(); // Number of block rows in node
-      int ncontrib = nr-sa;
       
       // Colum indexes
       int col_sa = (cncol > jj*blksz) ? 0 : (jj*blksz-cncol); // first col in block
@@ -739,6 +705,12 @@ namespace spldlt {
 
          // int c = map[ csnode.rlist[csnode.ncol+j] ];
          int c = cmap[ col_sa + j ]; // Destination column in parent front
+
+         // Make sure column is whitin the nodes dimensions
+         assert((c >= 0) && (c < node.nrow()));
+         // Make sure column is not in the delays
+         assert((c < node.symb().ncol) || (c >= node.ncol()));
+
          int cc = c / blksz;
          int dest_col_sa = (ncol > cc*blksz) ? 0 : (cc*blksz-ncol); // first col in block
 
@@ -746,7 +718,7 @@ namespace spldlt {
          T *src = &(src_blk.a[j*src_blk_lda]);
 
          // Enusre the destination column is in the contribution blocks
-         if (c >= ncol) {
+         if (c >= node.ncol()) {
 
             // int ldd = node.symb.nrow - node.symb.ncol;
             // T *dest = &node.contrib[(c-ncol)*ldd];
@@ -766,10 +738,12 @@ namespace spldlt {
                int rr = r / blksz;
                // First row index in CB of destination block
                int dest_row_sa = (ncol > rr*blksz) ? 0 : (rr*blksz-ncol);
-               sylver::Tile<T, PoolAlloc> &dest_blk = node.contrib_blocks[(rr-sa)+(cc-sa)*ncontrib];
+               // sylver::Tile<T, PoolAlloc> &dest_blk = node.contrib_blocks[(rr-sa)+(cc-sa)*ncontrib];
+               auto& dest_blk = node.contrib_block(rr, cc);
                int dest_blk_lda = dest_blk.lda;
+               assert((c - ncol - dest_col_sa) >= 0);
                T *dest = &dest_blk.a[ (c - ncol - dest_col_sa)*dest_blk_lda ];
-
+               assert((r - ncol - dest_row_sa) >= 0);   
                dest[ r - ncol - dest_row_sa ] += src[i];
             }
          }
@@ -789,16 +763,16 @@ namespace spldlt {
       
       // printf("[assemble_contrib_block_1d]\n");
 
-      int blksz = node.blksz();
+      int const blksz = node.blksz();
       
       // Destination node
-      int ncol = node.ncol();
+      int const ncol = node.ncol();
 
       // Source node
-      int cncol = cnode.ncol();
-      int cnrow = cnode.nrow();
+      int const cncol = cnode.ncol();
+      int const cnrow = cnode.nrow();
 
-      sylver::Tile<T, PoolAlloc>& src_blk = cnode.get_contrib_block(ii, jj);
+      sylver::Tile<T, PoolAlloc>& src_blk = cnode.contrib_block(ii, jj);
       // Get source block info
       int src_blk_lda = src_blk.lda;
       int src_blk_m = src_blk.m;
@@ -820,7 +794,7 @@ namespace spldlt {
          int c = cmap[ col_sa + j ];
          
          // Enusre the destination column is in the contribution blocks
-         if (c >= ncol) {
+         if (c >= node.ncol()) {
 
             // Block-column index
             int cc = c / blksz;
@@ -829,10 +803,10 @@ namespace spldlt {
 
             // Get diag block
             int diag_row_sa =  std::max(0, cc*blksz-ncol);
-            sylver::Tile<T, PoolAlloc>& diag_blk = node.get_contrib_block(cc, cc);
+            auto& diag_blk = node.contrib_block(cc, cc);
             int diag_blk_lda = diag_blk.lda;
 
-            assert(c - ncol - dest_col_sa >= 0);
+            assert((c - ncol - dest_col_sa) >= 0);
 
             T *dest = &diag_blk.a[ (c - ncol - dest_col_sa)*diag_blk_lda ];
 
@@ -858,7 +832,7 @@ namespace spldlt {
                
                // dest[ r - ncol - diag_row_sa ] += src[i];
 
-               assert(cmap[ row_sa + i ]-ncol-diag_row_sa >= 0);
+               assert((cmap[ row_sa + i ]-ncol-diag_row_sa) >= 0);
 
                dest[ cmap[ row_sa + i ] - ncol - diag_row_sa ] += src[i];
                               
@@ -965,22 +939,24 @@ namespace spldlt {
 
    // }
 
-   ////////////////////////////////////////////////////////////////////////////////   
-   // Assemble contrib subtree
+   ////////////////////////////////////////////////////////////
+   // assemble_contrib_subtree_block
    template <typename T, typename PoolAlloc>
-   void assemble_contrib_subtree(
+   void assemble_contrib_subtree_block(
          NumericFront<T,PoolAlloc>& node,
          sylver::SymbolicFront const& csnode,
-         void** child_contrib, 
-         int contrib_idx// Index of subtree to assemble
+         void** child_contrib,
+         int contrib_idx, // Index of subtree to assemble
+         int ii, // Block-row index
+         int jj // Block-column index
          ) {
 
       sylver::SymbolicFront const& snode = node.symb();
-      int blksz = node.blksz();
+      int const blksz = node.blksz();
 
       /* Initialise variables */
-      int ncol = node.ncol();
-      int nrow = node.nrow();
+      int const ncol = node.ncol();
+      int const nrow = node.nrow();
 
       // Retreive contribution block from subtrees
       int cn, ldcontrib, ndelay, lddelay;
@@ -994,16 +970,84 @@ namespace spldlt {
       // printf("[assemble_contrib_subtree] ndelay = %d, cval = %p\n", ndelay, cval);
       if(!cval) return; // child was all delays, nothing more to do
 
-      int sa = ncol / blksz; // Index of first block in contrib
-      int nr = (nrow-1) / blksz + 1;
-      int ncontrib = nr-sa;
-      for(int j = 0; j < cn; ++j) {
+      // Loop over columns of block-column `jj` 
+      for(int j = jj*blksz;
+          j < std::min((jj+1)*blksz,cn); ++j) {               
 
          int c = csnode.map[ j ]; // Destination column
 
          T const* src = &cval[j*ldcontrib];
 
+         // Make sure that the destination column is in the
+         // contribution of parent node
          if (c >= snode.ncol) {
+
+            int cc = c / blksz; // Destination block column
+            int dest_col_sa = (ncol > cc*blksz) ? 0 : (cc*blksz-ncol); // First col in block
+
+            // Loop over rows of block-row `ii`
+            for (int i = std::max(ii*blksz, j) ;
+                 i < std::min((ii+1)*blksz,cn); ++i) {
+
+               // Destination row in parent front
+               int r = csnode.map[ i ];
+               int rr = r / blksz; // Destination block row
+               int dest_row_sa = (ncol > rr*blksz) ? 0 : (rr*blksz-ncol);
+
+               // Destination block in contributions of parent node
+               auto& dest_blk = node.contrib_block(rr, cc);
+
+               int dest_blk_lda = dest_blk.lda;
+               assert( (c - ncol - dest_col_sa) >= 0 );
+               T *dest = &dest_blk.a[ (c - ncol - dest_col_sa)*dest_blk_lda ];
+               // Assemble destination block
+               assert( (r - ncol - dest_row_sa) >= 0 );
+               dest[ r - ncol - dest_row_sa ] += src[i];
+               
+            }
+         }         
+      }
+   }
+   
+   ////////////////////////////////////////////////////////////////////////////////   
+   // Assemble contrib subtree
+   template <typename T, typename PoolAlloc>
+   void assemble_contrib_subtree(
+         NumericFront<T,PoolAlloc>& node,
+         sylver::SymbolicFront const& csnode,
+         void** child_contrib, 
+         int contrib_idx// Index of subtree to assemble
+         ) {
+
+      int const blksz = node.blksz();
+
+      /* Initialise variables */
+      int const ncol = node.ncol();
+
+      // Retreive contribution block from subtrees
+      int cn, ldcontrib, ndelay, lddelay;
+      T const *cval, *delay_val;
+      int const *crlist, *delay_perm;
+      // spral_ssids_contrib_get_data(
+      contrib_get_data(
+            child_contrib[contrib_idx], &cn, &cval, &ldcontrib, &crlist,
+            &ndelay, &delay_perm, &delay_val, &lddelay
+            );
+      // printf("[assemble_contrib_subtree] ndelay = %d, cval = %p\n", ndelay, cval);
+      if(!cval) return; // child was all delays, nothing more to do
+
+      for(int j = 0; j < cn; ++j) {
+
+         int c = csnode.map[ j ]; // Destination column
+
+         // Make sure column is whitin the nodes dimensions
+         assert((c >= 0) && (c < node.nrow()));
+         // Make sure column is not in the delays
+         assert((c < node.symb().ncol) || (c >= node.ncol()));
+
+         T const* src = &cval[j*ldcontrib];
+
+         if (c >= node.symb().ncol) {
 
             int cc = c / blksz; // Destination block column
             int dest_col_sa = (ncol > cc*blksz) ? 0 : (cc*blksz-ncol); // First col in block
@@ -1013,10 +1057,13 @@ namespace spldlt {
                int rr = r / blksz; // Destination block row
                // First row index in CB of destination block
                int dest_row_sa = (ncol > rr*blksz) ? 0 : (rr*blksz-ncol);
-               sylver::Tile<T, PoolAlloc> &dest_blk = node.contrib_blocks[(rr-sa)+(cc-sa)*ncontrib];
+
+               sylver::Tile<T, PoolAlloc> &dest_blk = node.contrib_block(rr, cc);
                int dest_blk_lda = dest_blk.lda;
+               assert( (c - ncol - dest_col_sa) >= 0 );
                T *dest = &dest_blk.a[ (c - ncol - dest_col_sa)*dest_blk_lda ];
                // Assemble destination block
+               assert( (r - ncol - dest_row_sa) >= 0 );
                dest[ r - ncol - dest_row_sa ] += src[i];
             }
          }
@@ -1075,6 +1122,61 @@ namespace spldlt {
       }
 
    }
+
+   ////////////////////////////////////////////////////////////
+   // assemble_subtree_block
+   
+   /// @brief Assemble block (i,j) from subtree `csnode` to
+   /// fully-summed coeficients of parent node `node`
+   ///
+   /// @param i Block-row index of block to be assembled
+   /// @param i Block-column index of block to be assembled
+   template <typename T, typename PoolAlloc>
+   void assemble_subtree_block(
+         NumericFront<T,PoolAlloc>& node,
+         sylver::SymbolicFront const& csnode,
+         void** child_contrib, 
+         int contrib_idx,// Index of subtree to assemble
+         int ii, // Block-row index
+         int jj // Block-column index
+         ) {
+
+      int const blksz = node.blksz();
+
+      // Retreive contribution block from subtrees
+      int cn, ldcontrib, ndelay, lddelay;
+      T const *cval, *delay_val;
+      int const *crlist, *delay_perm;
+      // spral_ssids_contrib_get_data(
+      contrib_get_data(
+            child_contrib[csnode.contrib_idx],
+            &cn, &cval, &ldcontrib, &crlist,
+            &ndelay, &delay_perm, &delay_val,
+            &lddelay);
+
+      if(!cval) return; // child was all delays, nothing more to do
+      /* Handle expected contribution */
+      // for(int j = 0; j < cn; ++j) {
+      // Loop over columns of block-column `jj` 
+      for(int j = jj*blksz;
+          j < std::min((jj+1)*blksz,cn); ++j) {               
+         int c = csnode.map[ j ]; // Destination column                  
+         T const* src = &cval[j*ldcontrib];
+         // Make sure we stay in fully-summed coefficients
+         if (c < node.symb().ncol) {
+            int ldd = node.ldl();
+            T *dest = &node.lcol[c*ldd];
+
+            // for (int i = j ; i < cn; ++i) {
+            // Loop over rows of block-row `ii`
+            for (int i = std::max(ii*blksz, j) ;
+                 i < std::min((ii+1)*blksz,cn); ++i) {
+               // Assemble destination block
+               dest[ csnode.map[ i ]] += src[i];
+            }
+         }
+      }
+   }
    
    ////////////////////////////////////////////////////////////
    // assemble_subtree
@@ -1088,9 +1190,8 @@ namespace spldlt {
          int contrib_idx// Index of subtree to assemble
          ) {
 
-      sylver::SymbolicFront snode = node.symb(); // Symbolic node
-      int ncol = node.ncol();
-      size_t ldl = node.ldl(); // Leading dimension
+      int const ncol = node.ncol();
+      size_t const ldl = node.ldl(); // Leading dimension
 
       // Retreive contribution block from subtrees
       int cn, ldcontrib, ndelay, lddelay;
@@ -1133,7 +1234,7 @@ namespace spldlt {
       for(int j = 0; j < cn; ++j) {               
          int c = csnode.map[ j ]; // Destination column                  
          T const* src = &cval[j*ldcontrib];
-         if (c < snode.ncol) {
+         if (c < node.symb().ncol) {
             int ldd = node.ldl();
             T *dest = &node.lcol[c*ldd];
 
@@ -1198,8 +1299,8 @@ namespace spldlt {
 
       typedef typename std::allocator_traits<PoolAlloc>::template rebind_alloc<int> PoolAllocInt;
 
-      int blksz = node.blksz();
-      sylver::SymbolicFront snode = node.symb();
+      int const blksz = node.blksz();
+      sylver::SymbolicFront const& snode = node.symb();
 
       int nrow = node.nrow();
       int ncol = node.ncol();
@@ -1227,7 +1328,7 @@ namespace spldlt {
       // Assemble front: fully-summed columns 
       for (auto* child=node.first_child; child!=NULL; child=child->next_child) {
 
-         sylver::SymbolicFront &csnode = child->symb(); // Children symbolic node
+         sylver::SymbolicFront& csnode = child->symb(); // Children symbolic node
 
          int cm = csnode.nrow - csnode.ncol;
          csnode.map = new int[cm];
@@ -1372,5 +1473,5 @@ namespace spldlt {
 
    } // assemble_contrib_notask
 
-} /* end of namespace spldlt */
+}} // End of namespace sylver::spldlt
 

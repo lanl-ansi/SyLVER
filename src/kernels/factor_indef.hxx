@@ -14,6 +14,7 @@
 #include "ssids/cpu/Workspace.hxx"
 #include "ssids/cpu/kernels/calc_ld.hxx"
 
+namespace sylver {
 namespace spldlt {
 
    /// @brief Performs update of contribution block
@@ -306,7 +307,7 @@ namespace spldlt {
             T *lik = &lcol[first_col*ldl+lik_first_row];
 
             // Tile<T, PoolAlloc>& upd = node.contrib_blocks[(j-rsa)*ncontrib+(i-rsa)];
-            sylver::Tile<T, PoolAlloc>& upd = node.get_contrib_block(i, j);
+            sylver::Tile<T, PoolAlloc>& upd = node.contrib_block(i, j);
                            
             int ldld = spral::ssids::cpu::align_lda<T>(blksz);
             T *ld = work.get_ptr<T>(blksz*ldld);
@@ -336,4 +337,4 @@ namespace spldlt {
       // }
    }
 
-} // end of namespace spldlt
+}} // End of namespace sylver::spldlt

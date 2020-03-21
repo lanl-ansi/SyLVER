@@ -52,23 +52,16 @@ set(CMAKE_CXX_EXTENSIONS OFF) #...without compiler extensions like gnu++11
 # message("CMAKE_CXX_FLAGS_RELWITHDEBINFO: ${CMAKE_CXX_FLAGS_RELWITHDEBINFO}")
 # message("CMAKE_CXX_FLAGS_MINSIZEREL: ${CMAKE_CXX_FLAGS_MINSIZEREL}")
 
-# set(DUMMY "-smth")
-# enable_cxx_compiler_flag_if_supported(DUMMY "-march=native")
-# enable_cxx_compiler_flag_if_supported(DUMMY "-march=tet")
-# enable_cxx_compiler_flag_if_supported(DUMMY "-tet")
-# enable_cxx_compiler_flag_if_supported(DUMMY "-g")
-# message("DUMMY: ${DUMMY}")
-
 enable_cxx_compiler_flag_if_supported(CMAKE_CXX_FLAGS_RELEASE "-march=native")
 enable_cxx_compiler_flag_if_supported(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-march=native")
 enable_cxx_compiler_flag_if_supported(CMAKE_CXX_FLAGS_MINSIZEREL "-march=native")
 
-if(NOT SYLVER_HAVE_FLAG_march=native)
+if(NOT SYLVER_HAVE_CXX_FLAG_march=native)
   # This is useful on IBM machines where march=native is not
   # necessarily suported
   enable_cxx_compiler_flag_if_supported(CMAKE_CXX_FLAGS_RELEASE "-mcpu=native")
   enable_cxx_compiler_flag_if_supported(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-mcpu=native")
-  enable_cxx_compiler_flag_if_supported(CMAKE_CXX_FLAGS_MINSIZEREL "-march=native")
+  enable_cxx_compiler_flag_if_supported(CMAKE_CXX_FLAGS_MINSIZEREL "-mcpu=native")
 endif()
 
 # message("CMAKE_CXX_FLAGS_RELEASE: ${CMAKE_CXX_FLAGS_RELEASE}")
@@ -76,20 +69,44 @@ endif()
 # message("CMAKE_CXX_FLAGS_MINSIZEREL: ${CMAKE_CXX_FLAGS_MINSIZEREL}")
 
 # Debug flags
+# set(CMAKE_XCODE_GENERATE_SCHEME ON)
+# set(CMAKE_XCODE_SCHEME_ADDRESS_SANITIZER ON)
+# set(CMAKE_XCODE_SCHEME_ADDRESS_SANITIZER_USE_AFTER_RETURN ON)
+
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -ggdb")
 # set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=thread")
+# set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fsanitize=thread")
+# set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address")
+# set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fsanitize=address")
+# set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=undefined")
+# set (CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fsanitize=undefined")
+# set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=undefined")
 # set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=leak")
 # set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=bounds -fbounds-check")
-set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fbounds-check")
+# set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fbounds-check")
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -ffpe-trap=underflow,denormal" )
 
 ########################################
 # Fortran flags
 
-set(CMAKE_Fortran_FLAGS_RELWITHDEBINFO "${CMAKE_Fortran_FLAGS_RELWITHDEBINFO} -march=native")
+enable_fortran_compiler_flag_if_supported(CMAKE_Fortran_FLAGS_RELEASE "-march=native")
+enable_fortran_compiler_flag_if_supported(CMAKE_Fortran_FLAGS_RELWITHDEBINFO "-march=native")
+enable_fortran_compiler_flag_if_supported(CMAKE_Fortran_FLAGS_MINSIZEREL "-march=native")
+
+if(NOT SYLVER_HAVE_Fortran_FLAG_march=native)
+  # This is useful on IBM machines where march=native is not
+  # necessarily suported
+  enable_fortran_compiler_flag_if_supported(CMAKE_Fortran_FLAGS_RELEASE "-mcpu=native")
+  enable_fortran_compiler_flag_if_supported(CMAKE_Fortran_FLAGS_RELWITHDEBINFO "-mcpu=native")
+  enable_fortran_compiler_flag_if_supported(CMAKE_Fortran_FLAGS_MINSIZEREL "-mcpu=native")
+endif()
+
 # IBM machine
 # set(CMAKE_Fortran_FLAGS_RELWITHDEBINFO "${CMAKE_Fortran_FLAGS_RELWITHDEBINFO} -mcpu=native")
 # Debug flags
+# set(CMAKE_Fortran_FLAGS_DEBUG "${CMAKE_Fortran_FLAGS_DEBUG} -fsanitize=address")
+# set(CMAKE_Fortran_FLAGS_DEBUG "${CMAKE_Fortran_FLAGS_DEBUG} -fsanitize=undefined")
+# set(CMAKE_Fortran_FLAGS_DEBUG "${CMAKE_Fortran_FLAGS_DEBUG} -fsanitize=thread")
 set(CMAKE_Fortran_FLAGS_DEBUG "${CMAKE_Fortran_FLAGS_DEBUG} -Wall -Wextra -Warray-temporaries -Wconversion -fbacktrace -ffree-line-length-0")
 set(CMAKE_Fortran_FLAGS_DEBUG "${CMAKE_Fortran_FLAGS_DEBUG} -ffpe-trap=zero,overflow,underflow")
 set(CMAKE_Fortran_FLAGS_DEBUG "${CMAKE_Fortran_FLAGS_DEBUG} -fcheck=bounds,do,mem,pointer")
@@ -134,7 +151,7 @@ endif()
 # Options
 
 ## Set runtime system to be used for the execution
-set(SYLVER_RUNTIME "STF" CACHE STRING "Runtime system")
+set(SYLVER_RUNTIME "StarPU" CACHE STRING "Runtime system")
 set_property(CACHE SYLVER_RUNTIME PROPERTY STRINGS STF StarPU)
 # # Set BLAS and LAPACK libraries to use for linking
 # SET(BLAS_LAPACK "MKL" CACHE STRING "BLAS and LAPACK libraries")
@@ -376,6 +393,7 @@ if(SYLVER_ENABLE_CUDA)
   else()
     find_package(CUDA REQUIRED)
 
+    string(APPEND CUDA_NVCC_FLAGS " -std=c++11")
     string(APPEND CUDA_NVCC_FLAGS " -g -O2")
 
     # string(APPEND CUDA_NVCC_FLAGS "-g")
@@ -469,6 +487,7 @@ if(SYLVER_SPRAL_USE_INTERNAL)
     if(SYLVER_NATIVE_CUDA)
       string(APPEND SPRAL_CONFIGURE_OPTIONS " NVCCFLAGS=\"${CMAKE_CUDA_FLAGS}\"")
     else()
+      string(APPEND SPRAL_CONFIGURE_OPTIONS " NVCC=${CUDA_NVCC_EXECUTABLE}")
       string(APPEND SPRAL_CONFIGURE_OPTIONS " NVCCFLAGS=\"${CUDA_NVCC_FLAGS}\"")
     endif()
   else()
@@ -507,9 +526,10 @@ if(SYLVER_SPRAL_USE_INTERNAL)
     CONFIGURE_COMMAND ${CMAKE_BINARY_DIR}/spral-config.sh
     BUILD_COMMAND make
     INSTALL_COMMAND ""
+    # INSTALL_COMMAND cp ${CMAKE_BINARY_DIR}/spral/build/libspral.a ${CMAKE_BINARY_DIR}/
     BINARY_DIR ${SPRAL_DIR}
     )  
-  
+
 else()
   # Use external SPRAL library
   

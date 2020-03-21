@@ -5,8 +5,9 @@
 
 // SyLVER
 #include "sylver_ciface.hxx"
-#include "tasks.hxx"
+#include "tasks/tasks.hxx"
 
+namespace sylver {
 namespace spldlt {
    
    ////////////////////////////////////////////////////////////
@@ -143,4 +144,4 @@ namespace spldlt {
       node.ndelay_out(0); // no delays
    }
 
-}
+}} // End of sylver::spldlt namespace

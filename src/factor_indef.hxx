@@ -14,13 +14,13 @@
 #if defined(SPLDLT_USE_STARPU)
 #include "StarPU/codelets.hxx"
 #include "StarPU/kernels_indef.hxx"
-using namespace spldlt::starpu;
 #endif
 #include "Tile.hxx"
 
 // SSIDS
 #include "ssids/cpu/kernels/ldlt_nopiv.hxx"
 
+namespace sylver {
 namespace spldlt {
 
    /// @brief Factor subtree
@@ -75,7 +75,8 @@ namespace spldlt {
          sylver::options_t& options,
          PoolAlloc& pool_alloc,
          NumericFront<T, PoolAlloc>& front,
-         spral::ssids::cpu::Workspace& work,
+         // spral::ssids::cpu::Workspace& work,
+         std::vector<spral::ssids::cpu::Workspace>& workspaces,
          sylver::inform_t& stats) {
 
       typedef typename std::allocator_traits<PoolAlloc>::template rebind_alloc<int> IntAlloc;
@@ -92,18 +93,13 @@ namespace spldlt {
             FactorSymIndef<T, INNER_BLOCK_SIZE, Backup, debug, PoolAlloc>
             FactorSymIndefSpec;
 
+         int& nelim = front.nelim(); 
+            
          // Factor front
          FactorSymIndefSpec::factor_front_indef_app_notask(
-               front, options, stats, work, pool_alloc, 
-               front.nelim() // Return the number of succesfully
-                           // eliminated columns
-               );
-
-         int nrow = front.nrow();
-         int ncol = front.ncol();
-         int ldl = front.get_ldl();
+               front, options, stats, workspaces[0], pool_alloc, nelim);
          
-         if (front.nelim() < ncol) { 
+         if (front.nelim() < front.ncol()) { 
             // Some columns remain uneliminated after the first pass
             
             spldlt::ldlt_app_internal::
@@ -116,7 +112,8 @@ namespace spldlt {
                                          // to this front
             // Permute failed entries at the back of the front
             FactorSymIndefSpec::permute_failed(
-                  nrow, ncol, front.perm, front.lcol, ldl,
+                  front.nrow(), front.ncol(), front.perm,
+                  front.lcol, front.ldl(),
                   front.nelim(), cdata, front.blksz(),
                   pool_alloc);
          }
@@ -124,7 +121,7 @@ namespace spldlt {
       } // PivotMethod::app_block
 
       // Process uneliminated columns 
-      factor_front_indef_failed(front, work, options, stats);
+      factor_front_indef_failed(front, workspaces, options, stats);
       
    }
 
@@ -195,7 +192,7 @@ namespace spldlt {
    template <typename T, int iblksz, typename Backup, typename PoolAlloc>
    void factor_indef_init() {
 #if defined(SPLDLT_USE_STARPU)
-      codelet_init_indef<T, iblksz, Backup, PoolAlloc>();
+      sylver::spldlt::starpu::codelet_init_indef<T, iblksz, Backup, PoolAlloc>();
       // spldlt::starpu::codelet_init<T, FactorAllocator, PoolAllocator>();
       // spldlt::starpu::codelet_init_indef<T, iblksz, Backup, PoolAllocator>();
       // spldlt::starpu::codelet_init_factor_indef<T, PoolAllocator>();
@@ -278,7 +275,7 @@ namespace spldlt {
 
          // printf("[factor_block_app_task] m = %d, n = %d\n", dblk.get_m(), dblk.get_n());
 
-         spldlt::starpu::insert_factor_block_app(
+         sylver::spldlt::starpu::insert_factor_block_app(
                dblk.get_hdl(), cdata[blk].get_d_hdl(), cdata[blk].get_hdl(),
                dblk.get_m(), dblk.get_n(), 
                blk,
@@ -321,7 +318,7 @@ namespace spldlt {
 
 #if defined(SPLDLT_USE_STARPU)
 
-         spldlt::starpu::insert_applyN_block_app(
+         sylver::spldlt::starpu::insert_applyN_block_app(
                dblk.get_hdl(), rblk.get_hdl(),
                cdata[blk].get_hdl(),
                dblk.get_m(), dblk.get_n(), 
@@ -357,7 +354,7 @@ namespace spldlt {
 
 #if defined(SPLDLT_USE_STARPU)
 
-         spldlt::starpu::insert_applyT_block_app (
+         sylver::spldlt::starpu::insert_applyT_block_app (
                dblk.get_hdl(), cblk.get_hdl(),
                cdata[blk].get_hdl(),
                dblk.get_m(), dblk.get_n(), 
@@ -396,7 +393,7 @@ namespace spldlt {
 
 #if defined(SPLDLT_USE_STARPU)
 
-         spldlt::starpu::insert_updateN_block_app(
+         sylver::spldlt::starpu::insert_updateN_block_app(
                isrc.get_hdl(), jsrc.get_hdl(), ublk.get_hdl(), 
                cdata[blk].get_d_hdl(), cdata[blk].get_hdl(),
                ublk.get_m(), ublk.get_n(), 
@@ -448,7 +445,7 @@ namespace spldlt {
 
 #if defined(SPLDLT_USE_STARPU)
          
-         spldlt::starpu::insert_updateT_block_app(
+         sylver::spldlt::starpu::insert_updateT_block_app(
                isrc.get_hdl(), jsrc.get_hdl(), ublk.get_hdl(), 
                cdata[blk].get_hdl(),
                ublk.get_m(), ublk.get_n(),
@@ -479,7 +476,7 @@ namespace spldlt {
 
 #if defined(SPLDLT_USE_STARPU)
 
-         spldlt::starpu::insert_adjust(
+         sylver::spldlt::starpu::insert_adjust(
                cdata[blk].get_hdl(), blk,
                &next_elim, &cdata,
                ADJUST_APP_PRIO);
@@ -524,7 +521,7 @@ namespace spldlt {
 
 #if defined(SPLDLT_USE_STARPU)
 
-         spldlt::starpu::insert_restore_failed_block_app(
+         sylver::spldlt::starpu::insert_restore_failed_block_app(
                jblk.get_hdl(), blk.get_hdl(), cdata[elim_col].get_hdl(),
                blk.get_m(), blk.get_n(),
                blk.get_row(), blk.get_col(), elim_col,
@@ -1243,7 +1240,7 @@ namespace spldlt {
          for (int c = 0; c < nblk; c++)
             col_hdls[c] = cdata[c].get_hdl();
             
-         insert_permute_failed(
+         sylver::spldlt::starpu::insert_permute_failed(
                col_hdls, nblk,
                &node, &alloc);
 
@@ -1291,7 +1288,7 @@ namespace spldlt {
          int const m = front.nrow();
          int const n = front.ncol();
          T *lcol = front.lcol;
-         int ldl = front.get_ldl();
+         int ldl = front.ldl();
          T *d = &front.lcol[n*ldl];
          int* perm = front.perm;
          std::vector<Block<T, iblksz, IntAlloc>>& blocks = front.blocks;
@@ -1392,7 +1389,7 @@ namespace spldlt {
                for (int jblk = rsa; jblk < mblk; ++jblk) {
                   for (int iblk = jblk;  iblk < mblk; ++iblk) {
 
-                     sylver::Tile<T, Allocator>& upd = front.get_contrib_block(iblk, jblk);
+                     sylver::Tile<T, Allocator>& upd = front.contrib_block(iblk, jblk);
                      
                      update_contrib_block_app
                         <T, IntAlloc, Allocator>
@@ -2006,4 +2003,4 @@ namespace spldlt {
       }
    };
 
-} /* namespace spldlt */
+}} // End of namespace sylver::spldlt

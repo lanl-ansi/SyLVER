@@ -116,7 +116,7 @@ program spldlt_test
    !    stop
    ! endif
    
-   ! Initialization of SpLDLT
+   ! Initialization of SyLVER
    call sylver_init(ncpu, ngpu)
 
    ! Perform analysis
@@ -149,7 +149,7 @@ program spldlt_test
    write(*, "(a)") "ok"
    print *, "Solve took ", (stop_t - start_t)/real(rate_t)
    
-   ! Shutdown SpLDLT
+   ! Shutdown SyLVER
    call sylver_finalize()
 
    print *, "number bad cmp = ", count(abs(soln(1:n,1)-1.0).ge.1e-6)
@@ -284,6 +284,12 @@ program spldlt_test
           argnum = argnum + 1
           read (argval, *) options%u
           print *, 'Pivoting threshold u = ', options%u
+       case("--flat-topology")
+          print *, 'Force flat topology of CPU workers'
+          options%cpu_topology = SYLVER_CPU_TOPOLOGY_FLAT
+       case("--numa-topology")
+          print *, 'Enable NUMA topology of CPU workers'
+          options%cpu_topology = SYLVER_CPU_TOPOLOGY_NUMA
        case default
           print *, "Unrecognised command line argument: ", argval
           stop

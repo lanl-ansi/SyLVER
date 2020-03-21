@@ -10,12 +10,13 @@ Under Linux, or Mac OS X:
 .. code-block:: bash
 
    # Get latest development version from github
-   git clone --depth=1 https://github.com/NLAFET/sylver
+   git clone https://github.com/NLAFET/sylver
    cd sylver
 
    mkdir build # create build directory
-   cd build 
-   cmake <path-to-source> -DRUNTIME=StarPU # configure compilation
+   cd build
+   # configure compilation
+   cmake <path-to-source> -D SYLVER_RUNTIME=StarPU -D SYLVER_ENABLE_CUDA=ON
    make # run compilation 
 
 Third-party libraries
@@ -26,8 +27,19 @@ SPRAL
 
 `SPRAL <https://github.com/ralna/spral>`_ is an open-source library
 for sparse linear algebra and associated algorithm and has several
-important features used in SyLVER. The latest release of SPRAL can be
-found on its `GitHub repository
+important features used in SyLVER. By default, SPRAL is automatically
+download and built during the installation of SyLVER. However, if you
+wish to use your own version of SPRAL, which is not recommended, you
+can use the instructions below to install it.
+
+SPRAL installation
+^^^^^^^^^^^^^^^^^^
+
+The installation instruction presented here are only useful if you
+wish to install SPRAL as an internal package. By default SPRAL is
+automatically downloaded and built during the installation of SyLVER.
+
+The latest release of SPRAL can be found on its `GitHub repository
 <https://github.com/ralna/spral/releases>`_. The compilation of SPRAL
 is handled by autotools and for example can be done as follow when
 using the GCC compilers:
@@ -60,9 +72,9 @@ can be useful to fill the ``--with-blas`` and ``--with-lapack``
 options.
 
 When compiling SyLVER you need to provide both the path to the SPRAL
-source directory which can be given using the ``-DSPRAL_SRC_DIR``
+source directory which can be given using the ``-D SPRAL_SRC_DIR``
 CMake option or the ``SPRAL_SRC_DIR`` environment variable and the
-path to the SPRAL library which can be given using the ``-DSPRAL_DIR``
+path to the SPRAL library which can be given using the ``-D SPRAL_DIR``
 CMake option or the ``SPRAL_DIR`` environment variable.
                 
 METIS
@@ -74,7 +86,7 @@ needed when linking the SyLVER package for building examples and test
 drivers.
 
 When compiling SyLVER you can provide the path to the MeTiS library
-using either ``-DMETIS_DIR`` CMake option or the ``METIS_DIR``
+using either ``-D METIS_DIR`` CMake option or the ``METIS_DIR``
 environment variable.
 
 hwloc
@@ -83,18 +95,14 @@ hwloc
 The `hwloc <https://www.open-mpi.org/projects/hwloc/>`_ library is
 topology discovery library which is necessary for linking the examples
 and test drivers if SPRAL was compiled with it. In this case, the
-library path can be given to CMake using either the ``-DHWLOC_DIR`` or
-the ``HWLOC_DIR`` environment variable.
+library path can be given to CMake using either the ``-D HWLOC_DIR``
+definition or the ``HWLOC_DIR`` environment variable.
 
 Runtime system
 --------------
 
-By default, CMake will configure the compilation for a serial version
-of SyLVER that can be explicitly requested using the option
-``-DRUNTIME=STF``.
-
-The ``-DRUNTIME=StarPU`` enables the compilation of the parallel
-version of SyLVER using `StarPU runtime system
+The ``-D SYLVER_RUNTIME=StarPU`` enables the compilation of the
+parallel version of SyLVER using `StarPU runtime system
 <http://starpu.gforge.inria.fr/>`_. In this case the StarPU version
 needs to be at least 1.3.0. The StarPU library is found with the
 ``FindSTARPU.cmake`` script located in the ``cmake/Modules``
@@ -119,20 +127,21 @@ These libraries are found via the CMake scripts `FindBLAS
 <https://cmake.org/cmake/help/latest/module/FindBLAS.html>`_ and
 `FindLAPACK
 <https://cmake.org/cmake/help/latest/module/FindBLAS.html>`_ and
-therefore it is possible to use the options ``-DBLA_VENDOR`` to
+therefore it is possible to use the options ``-D BLA_VENDOR`` to
 indicate which libraries to use. For example:
 
 .. code-block:: bash
 
-   cmake <path-to-source> -DBLA_VENDOR=Intel10_64lp_seq # configure compilation
+   cmake <path-to-source> -D BLA_VENDOR=Intel10_64lp_seq # configure compilation
 
 selects and locates the sequential BLAS and LAPACK implementation for
 the compilation and when linking test drivers, example and tests.
 
 If CMake is unable to locate the requested libraries via the
-``-DBLA_VENDOR``, it is still possible to give them explicitly using the
-``-DLBLAS`` and ``-DLLAPACK`` options. For example:
+``-D BLA_VENDOR``, it is still possible to give them explicitly using the
+``-D LBLAS`` and ``-D LLAPACK`` options. For example:
 
 .. code-block:: bash
 
-   cmake <path-to-source> -DLBLAS="-L/path/to/blas -lblas" -DLLAPACK="-L/path/to/lapack -llapack" # configure compilation
+   # configure compilation
+   cmake <path-to-source> -D LBLAS="-L/path/to/blas -lblas" -D LLAPACK="-L/path/to/lapack -llapack"

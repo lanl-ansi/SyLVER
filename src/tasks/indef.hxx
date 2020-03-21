@@ -4,8 +4,9 @@
 #pragma once
 
 // SyLVER
-#include "kernels/ldlt_app.hxx"
+#include "kernels/assemble.hxx"
 #include "kernels/factor_indef.hxx"
+#include "kernels/ldlt_app.hxx"
 #include "Tile.hxx"
 // STD
 #include <assert.h>
@@ -17,6 +18,7 @@
 // SSIDS 
 #include "ssids/cpu/cpu_iface.hxx"
 
+namespace sylver {
 namespace spldlt {
 
    ////////////////////////////////////////////////////////////
@@ -75,7 +77,7 @@ namespace spldlt {
    template <typename T, typename PoolAlloc>
    void assemble_delays_subtree_task(
          NumericFront<T,PoolAlloc>& node, // Destination node 
-         sylver::SymbolicFront &csnode, // Root of the subtree
+         sylver::SymbolicFront const& csnode, // Root of the subtree
          void** child_contrib, 
          int contrib_idx, // Index of subtree to assemble
          int delay_col) {
@@ -83,10 +85,10 @@ namespace spldlt {
 #if defined(SPLDLT_USE_STARPU)
 
       // Node info
-      int blksz = node.blksz();
-      int ncol = node.ncol(); // Number of block-rows in destination node
-      int nr = node.nr(); // Number of block-rows in destination node
-      int nc = node.nc(); // Number of block-columns in destination node
+      int const blksz = node.blksz();
+      int const ncol = node.ncol(); // Number of block-rows in destination node
+      int const nr = node.nr(); // Number of block-rows in destination node
+      int const nc = node.nc(); // Number of block-columns in destination node
       starpu_data_handle_t *hdls = new starpu_data_handle_t[nr*nc];
       int nh = 0; // Number of handles/blocks in node
 
@@ -101,14 +103,14 @@ namespace spldlt {
       if (ndelay <= 0) return;
          
       // Figure out blocks involved in the assembly so that we can
-      // give this information data to StarPU.
+      // give this information to StarPU.
       int rr = -1;
       int cc = -1;
 
-      // Here we gather the handles for all blocks for rows and
-      // columns comprised between delay_col and
-      // delay_col+cnode.ndelay_out()-1. As a result, we might select
-      // more blocks than necessary.
+      // Here we collect the StarPU handles for all blocks for rows
+      // and columns comprised between `delay_col` and `delay_col +
+      // cnode.ndelay_out() - 1`. As a result, we might select more
+      // blocks than necessary.
       
       // Row and Column index of first destination block for this
       // assembly
@@ -342,5 +344,5 @@ namespace spldlt {
             
 #endif
    }
-   
-} // namespace spldlt
+
+}} // End of namespace sylver::spldlt
